@@ -1,0 +1,165 @@
+use crate::{
+    errors::MosaicError, instructions::init_signing_session::InitializeSigningSessionIxData,
+};
+use borsh::{BorshDeserialize, BorshSerialize};
+use pinocchio::{Address, error::ProgramError};
+
+/// proposal phase
+#[derive(Clone, Copy, Debug, BorshDeserialize, BorshSerialize, PartialEq)]
+pub enum SigningSessionPhase {
+    Uninitialized,
+    Active,
+    Approved,
+    Executed,
+}
+
+impl From<u8> for SigningSessionPhase {
+    fn from(value: u8) -> Self {
+        match value {
+            0 => SigningSessionPhase::Uninitialized,
+            1 => SigningSessionPhase::Active,
+            2 => SigningSessionPhase::Approved,
+            3 => SigningSessionPhase::Executed,
+            _ => panic!("invalid account state value: {value}"),
+        }
+    }
+}
+
+impl From<SigningSessionPhase> for u8 {
+    fn from(value: SigningSessionPhase) -> Self {
+        match value {
+            SigningSessionPhase::Uninitialized => 0,
+            SigningSessionPhase::Active => 1,
+            SigningSessionPhase::Approved => 2,
+            SigningSessionPhase::Executed => 3,
+        }
+    }
+}
+
+/// easy to serialize repr of AccountView
+#[derive(Clone, BorshDeserialize, BorshSerialize, Debug, PartialEq)]
+pub struct InstructionAccount {
+    pub pubkey: [u8; 32],
+    pub signer: bool,
+    pub writable: bool,
+}
+
+impl InstructionAccount {
+    /// returns serialized data with length
+    pub fn serialize(&self) -> Result<(Vec<u8>, usize), ProgramError> {
+        let data = borsh::to_vec(&self).map_err(|_| ProgramError::InvalidAccountData)?;
+        let size = data.len();
+        Ok((data, size))
+    }
+
+    pub fn deserialize(data: &[u8]) -> Result<Self, ProgramError> {
+        borsh::from_slice(&data).map_err(|_| ProgramError::InvalidAccountData)
+    }
+}
+
+/// signing session data
+#[derive(Clone, BorshDeserialize, BorshSerialize, Debug)]
+pub struct SigningSession {
+    /// proposal id
+    pub session_id: u16,
+
+    /// associated root pda // its not used for security checks but for account identification purposes
+    pub root_pda: Address,
+
+    /// current phase
+    pub phase: SigningSessionPhase,
+
+    /// keys of operators who signed
+    pub approvals: Vec<Address>,
+
+    /// instruction data to execute after consensus being reached
+    pub instruction_data: Vec<u8>,
+
+    /// instruction accounts to instruction_data
+    pub instruction_accounts: Vec<Vec<u8>>,
+
+    /// cannonical bump
+    pub bump: u8,
+}
+
+impl SigningSession {
+    pub fn init(data: InitializeSigningSessionIxData, id: u16, root_pda: &Address) -> Self {
+        Self {
+            session_id: id,
+            root_pda: *root_pda,
+            phase: SigningSessionPhase::Active,
+            approvals: Vec::new(),
+            instruction_data: data.instruction_data,
+            instruction_accounts: data.instruction_accounts,
+            bump: data.bump,
+        }
+    }
+}
+
+impl SigningSession {
+    /// checks if amount of approvals reached expected threshold    
+    pub fn check_approvals_reaching_threshold(&self, threshold: usize) -> bool {
+        self.approvals.len() == threshold
+    }
+
+    /// progress signing phase with overflow check
+    pub fn progress_phase_checked(&mut self) -> Result<(), ProgramError> {
+        match self.phase {
+            SigningSessionPhase::Executed => {
+                Err(MosaicError::SigningSessionPhaseAtFinalStage.into())
+            }
+            _ => {
+                let current_phase_value: u8 = self.phase.into();
+                self.phase = (current_phase_value + 1).into();
+                Ok(())
+            }
+        }
+    }
+
+    /// push signer approval with check if it already was casted
+    pub fn approve_checked(&mut self, signer: &Address) -> Result<(), ProgramError> {
+        if self.approvals.contains(signer) {
+            return Err(MosaicError::SigningSessionSignerAlreadyApproved.into());
+        };
+        self.approvals.push(*signer);
+
+        Ok(())
+    }
+
+    /// checks if signing session is active
+    pub fn must_be_active(&self) -> Result<(), ProgramError> {
+        if self.phase != SigningSessionPhase::Active {
+            return Err(MosaicError::SigningSessionPhaseIncorrect.into());
+        }
+        Ok(())
+    }
+
+    /// checks if signing session is approved
+    pub fn must_be_approved(&self) -> Result<(), ProgramError> {
+        if self.phase != SigningSessionPhase::Approved {
+            return Err(MosaicError::SigningSessionPhaseIncorrect.into());
+        }
+        Ok(())
+    }
+
+    /// checks if root last id equals the session id
+    pub fn sessions_must_equal(&self, root_last_id: u16) -> Result<(), ProgramError> {
+        if self.session_id != root_last_id {
+            return Err(MosaicError::SigningSessionIdMustEqualRootLastId.into());
+        }
+        Ok(())
+    }
+}
+
+impl SigningSession {
+    /// returns serialized data with length
+    pub fn serialize(&self) -> Result<(Vec<u8>, usize), ProgramError> {
+        let data = borsh::to_vec(&self).map_err(|_| ProgramError::InvalidAccountData)?;
+        let size = data.len();
+        Ok((data, size))
+    }
+
+    pub fn deserialize(data: &[u8]) -> Result<Self, ProgramError> {
+        borsh::from_slice(&data).map_err(|_| ProgramError::InvalidAccountData)
+    }
+}
