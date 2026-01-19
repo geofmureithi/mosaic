@@ -99,7 +99,7 @@ macro_rules! invoke_signed_dynamic {
             try_invoke!(18);
             try_invoke!(19);
             try_invoke!(20);
-            break Err(solana_program::program_error::ProgramError::InvalidArgument.into());
+            break Err(ProgramError::InvalidArgument.into());
         }
     }};
 }
