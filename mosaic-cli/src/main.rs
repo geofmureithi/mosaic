@@ -2,10 +2,17 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
-use crate::{config::{load_config, merge_cli_config}, handlers::{handle_create_session, handle_execute, handle_initialize_root, handle_list_sessions, handle_sign, handle_view_root, handle_view_session}};
+use crate::{
+    config::{load_config, merge_cli_config},
+    handlers::{
+        handle_close_session, handle_create_session, handle_execute, handle_initialize_root,
+        handle_list_sessions, handle_sign, handle_view_root, handle_view_session,
+    },
+};
 
 mod config;
 mod handlers;
+mod types;
 
 #[derive(Debug, Parser)]
 #[command(name = "mosaic-cli")]
@@ -84,10 +91,21 @@ enum Commands {
     },
 
     ListSessions,
+
+    CloseSession {
+        #[arg(short, long)]
+        session_id: u16,
+
+        #[arg(short, long)]
+        closer: PathBuf,
+    },
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
+
+    tracing_subscriber::fmt::init();
+
     let cli = Cli::parse();
 
     let mut config = load_config(cli.config.as_ref())?;
@@ -118,6 +136,9 @@ async fn main() -> Result<()> {
         Commands::ViewRoot => handle_view_root(&config).await?,
         Commands::ViewSession { session_id } => handle_view_session(&config, session_id).await?,
         Commands::ListSessions => handle_list_sessions(&config).await?,
+        Commands::CloseSession { session_id, closer } => {
+            handle_close_session(&config, session_id, closer).await?
+        }
     }
 
     Ok(())
